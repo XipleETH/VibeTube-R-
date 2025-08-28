@@ -165,6 +165,29 @@ class AudioVibeService : Service() {
     }
 
     private var lastVibe = 0L
+    // Estado para modo ráfaga continuo (metralleta)
+    private var lastShotTime = 0L
+    private var rapidShotsCount = 0
+    private var continuousRunActive = false
+    private var lastRunStart = 0L
+
+    private fun startContinuousRun() {
+        if (continuousRunActive) return
+        continuousRunActive = true
+        lastRunStart = System.currentTimeMillis()
+        // Patrón cíclico de pequeños pulsos (se repite desde índice 1 para loop)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val timings = longArrayOf(0, 28, 22, 28, 22) // on/off alternado
+            val amplitudes = intArrayOf(0, 200, 0, 220, 0) // leve variación
+            vibrator.vibrate(VibrationEffect.createWaveform(timings, 1))
+        } else @Suppress("DEPRECATION") vibrator.vibrate(longArrayOf(0, 30, 25, 30, 25), 1)
+    }
+
+    private fun stopContinuousRun() {
+        if (!continuousRunActive) return
+        continuousRunActive = false
+        try { vibrator.cancel() } catch (_: Exception) {}
+    }
     // Parámetros fijos simplificados
     private data class SimpleParams(
         val minShotDb: Double = -22.0,
@@ -175,7 +198,8 @@ class AudioVibeService : Service() {
         val minDerivativeMedium: Double = 0.28,
         val refractoryShotMs: Long = 70,
         val refractoryMediumMs: Long = 150,
-        val vibShotMs: Int = 32,
+    val vibShotSoftMs: Int = 32,
+    val vibShotStrongMs: Int = 58,
         val vibBurstTapMs: Int = 18,
         val vibExplosionMs: Int = 120
     )
@@ -239,17 +263,46 @@ class AudioVibeService : Service() {
             heavyCond = lastLowRatio > 0.55 && (derivative > params.minDerivativeMedium * 0.5) && (db > params.minMediumDb || db > dynMedium)
         }
 
-        if (heavyCond && now - lastVibe > params.refractoryMediumMs * 2) { // explosión
+    if (heavyCond && now - lastVibe > params.refractoryMediumMs * 2) { // explosión
+            // En explosión paramos ráfaga continua para priorizar evento fuerte
+            stopContinuousRun()
             vibrateTap(params.vibExplosionMs)
             lastVibe = now
         } else if (shotCond && now - lastVibe > params.refractoryShotMs) {
-            // si es ráfaga detectaremos múltiples disparos sucesivos
-            vibrateTap(params.vibShotMs)
-            lastVibe = now
+            // Detectar ráfaga rápida
+            if (now - lastShotTime < 140) { // intervalo corto => parte de ráfaga
+                rapidShotsCount++
+            } else {
+                rapidShotsCount = 1
+            }
+            lastShotTime = now
+            if (!continuousRunActive) {
+                // A partir de 3 disparos rápidos activamos modo continuo
+                if (rapidShotsCount >= 3) {
+                    startContinuousRun()
+                } else {
+            // Pulsos sueltos antes de entrar en modo continuo
+            val strong = isStrongShot(db, derivative)
+            vibrateShot(strong)
+                    lastVibe = now
+                }
+            } else {
+                // Ya estamos en modo continuo: sólo actualizamos lastVibe para evitar toques extra
+                lastVibe = now
+            }
         } else if (mediumCond && now - lastVibe > params.refractoryMediumMs) {
-            // vibración corta para pequeños impactos / transición de ráfaga
-            vibrateTap(params.vibBurstTapMs)
-            lastVibe = now
+            if (!continuousRunActive) {
+                vibrateTap(params.vibBurstTapMs)
+                lastVibe = now
+            }
+        }
+
+        // Comprobar si debemos detener la ráfaga continua por falta de disparos recientes
+        if (continuousRunActive) {
+            val gap = now - lastShotTime
+            if (gap > 220) { // no hay disparos recientes => detener
+                stopContinuousRun()
+            }
         }
     }
 
@@ -329,6 +382,34 @@ class AudioVibeService : Service() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             vibrator.vibrate(VibrationEffect.createOneShot(ms.toLong(), VibrationEffect.DEFAULT_AMPLITUDE))
         } else @Suppress("DEPRECATION") vibrator.vibrate(ms.toLong())
+    }
+
+    private fun vibrateShot(strong: Boolean) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (strong) {
+                // Patrón fuerte: pulso más largo + pequeño rebote
+                val timings = longArrayOf(0, params.vibShotStrongMs.toLong(), 25, 22)
+                val amps = intArrayOf(0, 255, 0, 200)
+                vibrator.vibrate(VibrationEffect.createWaveform(timings, amps, -1))
+            } else {
+                vibrator.vibrate(
+                    VibrationEffect.createOneShot(
+                        params.vibShotSoftMs.toLong(),
+                        170 // menor amplitud
+                    )
+                )
+            }
+        } else {
+            @Suppress("DEPRECATION")
+            vibrator.vibrate((if (strong) params.vibShotStrongMs else params.vibShotSoftMs).toLong())
+        }
+    }
+
+    private fun isStrongShot(db: Double, derivative: Double): Boolean {
+        // Criterio: exceso de dB sobre umbral dinámico o derivada muy alta
+        val dynShot = noiseFloorDb + params.shotOffsetDb
+        val excessDb = db - dynShot
+        return excessDb > 6.0 || derivative > (params.minDerivativeShot * 2.2)
     }
 
     override fun onDestroy() {

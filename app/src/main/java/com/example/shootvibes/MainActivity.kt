@@ -69,8 +69,10 @@ class MainActivity : ComponentActivity() {
             MaterialTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     FireScreen(
-                        onSingle = { playShot(ShotType.SINGLE) },
-                        onBurst = { playShot(ShotType.BURST) },
+                        onSingleSoft = { playShot(ShotType.SINGLE_SOFT) },
+                        onBurstSoft = { playShot(ShotType.BURST_SOFT) },
+                        onSingleStrong = { playShot(ShotType.SINGLE_STRONG) },
+                        onBurstStrong = { playShot(ShotType.BURST_STRONG) },
                         onAuto = { playShot(ShotType.AUTO) },
                         onToggleAudioReactive = { enabled -> toggleAudioService(enabled) },
                         // perfiles eliminados
@@ -128,14 +130,39 @@ class MainActivity : ComponentActivity() {
             }
         }
 
-        when (type) {
-            ShotType.SINGLE -> {
-                // soundPool.play(singleId, 1f,1f,1,0,1f)
-                vibrate(longArrayOf(0, 35)) // quick tap
+        fun vibrateWithAmplitudes(timings: LongArray, amplitudes: IntArray) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val effect = VibrationEffect.createWaveform(timings, amplitudes, -1)
+                vibrator.vibrate(effect)
+            } else {
+                // Fallback: ignore amplitudes
+                vibrate(timings)
             }
-            ShotType.BURST -> {
-                // soundPool.play(burstId, 1f,1f,1,0,1f)
-                vibrate(longArrayOf(0, 30, 40, 30, 40, 30)) // three-round burst
+        }
+
+        when (type) {
+            ShotType.SINGLE_SOFT -> {
+                vibrate(longArrayOf(0, 35)) // disparo suave
+            }
+            ShotType.BURST_SOFT -> {
+                vibrate(longArrayOf(0, 30, 40, 30, 40, 30)) // ráfaga suave 3 golpes
+            }
+            ShotType.SINGLE_STRONG -> {
+                // Pulso más largo + rebote para sensación contundente
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    val timings = longArrayOf(0, 70, 25, 25)
+                    val amps = intArrayOf(0, 255, 0, 180)
+                    val effect = VibrationEffect.createWaveform(timings, amps, -1)
+                    vibrator.vibrate(effect)
+                } else {
+                    @Suppress("DEPRECATION") vibrator.vibrate(70)
+                }
+            }
+            ShotType.BURST_STRONG -> {
+                // 3 pulsos más contundentes (duraciones mayores) + amplitud alta
+                val timings = longArrayOf(0, 55, 40, 55, 40, 65) // 3 vibraciones
+                val amplitudes = intArrayOf(0, 255, 0, 255, 0, 255)
+                vibrateWithAmplitudes(timings, amplitudes)
             }
             ShotType.AUTO -> {
                 // Simulate short automatic spray
@@ -159,13 +186,15 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-enum class ShotType { SINGLE, BURST, AUTO }
+enum class ShotType { SINGLE_SOFT, BURST_SOFT, SINGLE_STRONG, BURST_STRONG, AUTO }
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
 fun FireScreen(
-    onSingle: () -> Unit,
-    onBurst: () -> Unit,
+    onSingleSoft: () -> Unit,
+    onBurstSoft: () -> Unit,
+    onSingleStrong: () -> Unit,
+    onBurstStrong: () -> Unit,
     onAuto: () -> Unit,
     onToggleAudioReactive: (Boolean) -> Unit,
     onProfileChange: (String) -> Unit,
@@ -199,8 +228,10 @@ fun FireScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically)
     ) {
-        Button(onClick = onSingle) { Text(text = "Disparo único") }
-        Button(onClick = onBurst) { Text(text = "Ráfaga") }
+    Button(onClick = onSingleSoft) { Text(text = "Disparo suave") }
+    Button(onClick = onBurstSoft) { Text(text = "Ráfaga suave") }
+    Button(onClick = onSingleStrong) { Text(text = "Disparo fuerte") }
+    Button(onClick = onBurstStrong) { Text(text = "Ráfaga fuerte") }
         Button(onClick = onAuto) { Text(text = "Automático") }
     Divider()
     Text("Detección audio (ráfagas & explosiones)")
