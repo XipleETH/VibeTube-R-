@@ -1,0 +1,6 @@
+<resources>
+    <string name="app_name">ShootVibes</string>
+    <string name="fire_single">Disparo único</string>
+    <string name="fire_burst">Ráfaga</string>
+    <string name="fire_auto">Automático</string>
+</resources>

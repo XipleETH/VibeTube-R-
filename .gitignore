@@ -1,0 +1,24 @@
+*.iml
+.gradle/
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+**/build/
+*.apk
+*.aab
+!gradle/wrapper/gradle-wrapper.properties
+
+# Added: ignore unpacked Gradle distribution and downloaded archive
+/gradle-8.*/
+/gradle.zip
+
+.git_backup_OLD/
