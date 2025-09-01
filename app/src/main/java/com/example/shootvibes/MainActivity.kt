@@ -9,32 +9,19 @@ import android.os.Vibrator
 import android.os.VibratorManager
 import android.content.Context
 import android.content.Intent
-import androidx.lifecycle.lifecycleScope
-import android.media.projection.MediaProjectionManager
-import androidx.activity.result.contract.ActivityResultContracts
-import android.content.BroadcastReceiver
-import android.content.IntentFilter
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.Switch
-import androidx.compose.material3.SwitchDefaults
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.Text
-import androidx.compose.material3.Button
-import androidx.compose.material3.Surface
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Divider
-import androidx.compose.material3.ExperimentalMaterial3Api
+// removed unused styling imports
+import androidx.compose.ui.input.pointer.pointerInteropFilter
+import android.view.MotionEvent
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import androidx.core.app.ActivityCompat
-import androidx.core.content.ContextCompat
-import android.Manifest
-import android.content.pm.PackageManager
-
+import kotlinx.coroutines.delay
 
 class MainActivity : ComponentActivity() {
     private lateinit var soundPool: SoundPool
@@ -42,9 +29,29 @@ class MainActivity : ComponentActivity() {
     private var burstId by mutableStateOf(0)
     private var autoId by mutableStateOf(0)
     private var permissionCallback: ((Boolean) -> Unit)? = null
-    private val micPermissionLauncher = registerForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        permissionCallback?.invoke(granted)
-        permissionCallback = null
+    private var capturing by mutableStateOf(false)
+
+    private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
+        if (res.resultCode == RESULT_OK && res.data != null) {
+            val svcIntent = Intent(this, AudioVibeService::class.java).apply {
+                action = AudioVibeService.ACTION_PROJECTION_RESULT
+                putExtra(AudioVibeService.EXTRA_RESULT_CODE, res.resultCode)
+                putExtra(AudioVibeService.EXTRA_DATA_INTENT, res.data)
+            }
+            startService(svcIntent)
+            capturing = true
+        } else capturing = false
+    }
+
+    private fun startProjection() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return
+        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as android.media.projection.MediaProjectionManager
+        projectionLauncher.launch(mpm.createScreenCaptureIntent())
+    }
+
+    private fun stopCapture() {
+        startService(Intent(this, AudioVibeService::class.java).apply { action = AudioVibeService.ACTION_STOP })
+        capturing = false
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,102 +80,70 @@ class MainActivity : ComponentActivity() {
                         onBurstSoft = { playShot(ShotType.BURST_SOFT) },
                         onSingleStrong = { playShot(ShotType.SINGLE_STRONG) },
                         onBurstStrong = { playShot(ShotType.BURST_STRONG) },
-                        onAuto = { playShot(ShotType.AUTO) },
-                        onToggleAudioReactive = { enabled -> toggleAudioService(enabled) },
-                        // perfiles eliminados
-                        onProfileChange = { },
-                        currentProfile = "",
-                        onRequestPlaybackCapture = { requestPlaybackCapture() }
+                        onSingleUltra = { playShot(ShotType.SINGLE_ULTRA) },
+                        onBurstUltra = { playShot(ShotType.BURST_ULTRA) },
+                        onExplosion = { playShot(ShotType.EXPLOSION) },
+                        capturing = capturing,
+                        onToggleCapture = { want -> if (want) startProjection() else stopCapture() }
                     )
                 }
             }
         }
     }
 
-    // perfiles eliminados
-    private fun saveProfile(id: String) { }
-
-    private fun toggleAudioService(start: Boolean) {
-        val intent = Intent(this, AudioVibeService::class.java)
-        if (start) startService(intent) else stopService(intent)
-    }
-
-    private val projectionLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { res ->
-        if (res.resultCode == RESULT_OK && res.data != null) {
-            val svcIntent = Intent(this, AudioVibeService::class.java).apply {
-                action = AudioVibeService.ACTION_PROJECTION_RESULT
-                putExtra(AudioVibeService.EXTRA_RESULT_CODE, res.resultCode)
-                putExtra(AudioVibeService.EXTRA_DATA_INTENT, res.data)
-            }
-            startService(svcIntent)
-        }
-    }
-
-    private fun requestPlaybackCapture() {
-        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.Q) return
-        val mpm = getSystemService(Context.MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-        val intent = mpm.createScreenCaptureIntent()
-        projectionLauncher.launch(intent)
-    }
-
     private fun playShot(type: ShotType) {
         val vibrator = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val vm = getSystemService(VIBRATOR_MANAGER_SERVICE) as VibratorManager
             vm.defaultVibrator
-        } else {
-            @Suppress("DEPRECATION")
-            getSystemService(VIBRATOR_SERVICE) as Vibrator
-        }
-
-        fun vibrate(pattern: LongArray, repeat: Int = -1) {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val effect = VibrationEffect.createWaveform(pattern, repeat)
-                vibrator.vibrate(effect)
-            } else {
-                @Suppress("DEPRECATION")
-                vibrator.vibrate(pattern, repeat)
-            }
-        }
+        } else { @Suppress("DEPRECATION") getSystemService(VIBRATOR_SERVICE) as Vibrator }
 
         fun vibrateWithAmplitudes(timings: LongArray, amplitudes: IntArray) {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                val effect = VibrationEffect.createWaveform(timings, amplitudes, -1)
-                vibrator.vibrate(effect)
-            } else {
-                // Fallback: ignore amplitudes
-                vibrate(timings)
-            }
+                vibrator.vibrate(VibrationEffect.createWaveform(timings, amplitudes, -1))
+            } else { @Suppress("DEPRECATION") vibrator.vibrate(timings, -1) }
         }
 
         when (type) {
             ShotType.SINGLE_SOFT -> {
-                vibrate(longArrayOf(0, 35)) // disparo suave
+                vibrateWithAmplitudes(longArrayOf(0, 35), intArrayOf(0, 180))
             }
             ShotType.BURST_SOFT -> {
-                vibrate(longArrayOf(0, 30, 40, 30, 40, 30)) // ráfaga suave 3 golpes
+                // 4 pulsos suaves (antes eran 3). Patrón: vib 28 / pausa 40 repetido 4 veces.
+                vibrateWithAmplitudes(
+                    longArrayOf(0, 28, 40, 28, 40, 28, 40, 28),
+                    intArrayOf(0, 170, 0, 170, 0, 170, 0, 170)
+                )
             }
             ShotType.SINGLE_STRONG -> {
-                // Pulso más largo + rebote para sensación contundente
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                    val timings = longArrayOf(0, 70, 25, 25)
-                    val amps = intArrayOf(0, 255, 0, 180)
-                    val effect = VibrationEffect.createWaveform(timings, amps, -1)
-                    vibrator.vibrate(effect)
-                } else {
-                    @Suppress("DEPRECATION") vibrator.vibrate(70)
-                }
+                vibrateWithAmplitudes(longArrayOf(0, 70), intArrayOf(0, 255))
             }
             ShotType.BURST_STRONG -> {
-                // 3 pulsos más contundentes (duraciones mayores) + amplitud alta
-                val timings = longArrayOf(0, 55, 40, 55, 40, 65) // 3 vibraciones
-                val amplitudes = intArrayOf(0, 255, 0, 255, 0, 255)
-                vibrateWithAmplitudes(timings, amplitudes)
+                // 4 pulsos fuertes (antes 3). Pulsos ~55 ms separados por 40 ms.
+                vibrateWithAmplitudes(
+                    longArrayOf(0, 55, 40, 55, 40, 55, 40, 55),
+                    intArrayOf(0, 255, 0, 240, 0, 240, 0, 240)
+                )
             }
-            ShotType.AUTO -> {
-                // Simulate short automatic spray
-                val rounds = 8
-                val pattern = LongArray(rounds * 2) { i -> if (i % 2 == 0) 0L else 28L }
-                vibrate(pattern)
+            ShotType.SINGLE_ULTRA -> {
+                // Ultra: longer + full amplitude + slight tail reinforcement
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    vibrator.vibrate(VibrationEffect.createWaveform(
+                        longArrayOf(0, 90, 30, 35), intArrayOf(0, 255, 0, 220), -1
+                    ))
+                } else @Suppress("DEPRECATION") vibrator.vibrate(90)
+            }
+            ShotType.BURST_ULTRA -> {
+                // Ultra burst: 4 heavy pulses
+                vibrateWithAmplitudes(
+                    longArrayOf(0, 70, 45, 70, 45, 70, 45, 85),
+                    intArrayOf(0, 255, 0, 255, 0, 255, 0, 255)
+                )
+            }
+            ShotType.EXPLOSION -> {
+                vibrateWithAmplitudes(
+                    longArrayOf(0, 100, 40, 150, 50, 120),
+                    intArrayOf(0, 255, 0, 230, 0, 160)
+                )
             }
         }
     }
@@ -178,15 +153,10 @@ class MainActivity : ComponentActivity() {
         soundPool.release()
     }
 
-    fun ensureMicPermission(cb: (Boolean) -> Unit) {
-        val granted = ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
-        if (granted) { cb(true); return }
-    permissionCallback = cb
-    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-    }
+    fun ensureMicPermission(cb: (Boolean) -> Unit) { cb(true) }
 }
 
-enum class ShotType { SINGLE_SOFT, BURST_SOFT, SINGLE_STRONG, BURST_STRONG, AUTO }
+enum class ShotType { SINGLE_SOFT, BURST_SOFT, SINGLE_STRONG, BURST_STRONG, SINGLE_ULTRA, BURST_ULTRA, EXPLOSION }
 
 @Composable
 @OptIn(ExperimentalMaterial3Api::class)
@@ -195,62 +165,62 @@ fun FireScreen(
     onBurstSoft: () -> Unit,
     onSingleStrong: () -> Unit,
     onBurstStrong: () -> Unit,
-    onAuto: () -> Unit,
-    onToggleAudioReactive: (Boolean) -> Unit,
-    onProfileChange: (String) -> Unit,
-    currentProfile: String,
-    onRequestPlaybackCapture: () -> Unit
+    onSingleUltra: () -> Unit,
+    onBurstUltra: () -> Unit,
+    onExplosion: () -> Unit,
+    capturing: Boolean,
+    onToggleCapture: (Boolean) -> Unit
 ) {
-    var reactive by remember { mutableStateOf(false) }
-    val context = androidx.compose.ui.platform.LocalContext.current
-    var source by remember { mutableStateOf(AudioVibeService.lastSource) }
-
-    // Receiver para fuente
-    DisposableEffect(Unit) {
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(p0: android.content.Context?, p1: Intent?) {
-                val s = p1?.getStringExtra(AudioVibeService.EXTRA_SOURCE)
-                if (s != null) source = s
-            }
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            context.registerReceiver(receiver, IntentFilter(AudioVibeService.BROADCAST_SOURCE), Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            context.registerReceiver(receiver, IntentFilter(AudioVibeService.BROADCAST_SOURCE))
-        }
-        onDispose { context.unregisterReceiver(receiver) }
-    }
+    var lang by remember { mutableStateOf(Language.ES) }
+    fun tr(es: String, en: String) = if (lang == Language.ES) es else en
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .padding(24.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(24.dp, Alignment.CenterVertically)
+        verticalArrangement = Arrangement.spacedBy(20.dp, Alignment.CenterVertically)
     ) {
-    Button(onClick = onSingleSoft) { Text(text = "Disparo suave") }
-    Button(onClick = onBurstSoft) { Text(text = "Ráfaga suave") }
-    Button(onClick = onSingleStrong) { Text(text = "Disparo fuerte") }
-    Button(onClick = onBurstStrong) { Text(text = "Ráfaga fuerte") }
-        Button(onClick = onAuto) { Text(text = "Automático") }
-    Divider()
-    Text("Detección audio (ráfagas & explosiones)")
-    Spacer(Modifier.height(4.dp))
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text("Audio reactivo")
-            Switch(checked = reactive, onCheckedChange = {
-                reactive = it
-                (context as? MainActivity)?.let { act ->
-                    if (it) act.ensureMicPermission { granted ->
-                        if (granted) onToggleAudioReactive(true) else reactive = false
-                    } else onToggleAudioReactive(false)
-                }
-            }, colors = SwitchDefaults.colors())
-        }
-    Text("Fuente actual: $source")
-    Button(onClick = onRequestPlaybackCapture) { Text("Capturar audio sistema (API29+)") }
+        Button(onClick = { lang = if (lang == Language.ES) Language.EN else Language.ES }) { Text(tr("English", "Español")) }
+        Button(onClick = onSingleSoft) { Text(tr("Disparo suave", "Soft Shot")) }
+    HoldBurstButton(label = tr("Ráfaga suave", "Soft Burst")) { onBurstSoft() }
+        Button(onClick = onSingleStrong) { Text(tr("Disparo fuerte", "Strong Shot")) }
+    HoldBurstButton(label = tr("Ráfaga fuerte", "Strong Burst")) { onBurstStrong() }
+        Button(onClick = onSingleUltra) { Text(tr("Disparo ULTRA", "ULTRA Shot")) }
+    HoldBurstButton(label = tr("Ráfaga ULTRA", "ULTRA Burst")) { onBurstUltra() }
+        Button(onClick = onExplosion) { Text(tr("Explosión", "Explosion")) }
+        Divider()
+        Button(onClick = { onToggleCapture(!capturing) }) { Text(tr(if (capturing) "Detener captura" else "Capturar audio", if (capturing) "Stop capture" else "Capture audio")) }
     }
 }
 
-private const val REQ_MIC = 2001
+enum class Language { ES, EN }
+
+@OptIn(androidx.compose.ui.ExperimentalComposeUiApi::class)
+@Composable
+private fun HoldBurstButton(
+    label: String,
+    intervalMs: Long = 130L,
+    onBurstTick: () -> Unit
+) {
+    var pressed by remember { mutableStateOf(false) }
+    LaunchedEffect(pressed) {
+        while (pressed) {
+            onBurstTick()
+            delay(intervalMs)
+        }
+    }
+    Button(
+        onClick = { /* handled by press state */ },
+        modifier = Modifier
+            .fillMaxWidth()
+            .pointerInteropFilter { e ->
+                when (e.action) {
+                    MotionEvent.ACTION_DOWN -> { pressed = true; true }
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> { pressed = false; true }
+                    else -> false
+                }
+            }
+    ) { Text(label) }
+}
 
